@@ -13,7 +13,7 @@ def predict_anomalies(data):
     data['ts'] = pd.to_datetime(data['ts']).astype(np.int64) / 10**9
     
     # Muat scaler yang disimpan
-    scaler = joblib.load('scaler.pkl')
+    scaler = joblib.load('model/scaler.pkl')
     
     # Normalisasi data menggunakan scaler yang sama
     data['rssi'] = scaler.transform(data[['rssi']])
@@ -28,7 +28,7 @@ def predict_anomalies(data):
     test_generator = TimeseriesGenerator(X_new, y_new, length=seq_length, batch_size=batch_size)
     
     # Muat model yang disimpan
-    loaded_model = load_model('lstm-over-time_model.h5')
+    loaded_model = load_model('model/lstm-over-time_model.h5')
     
     # Prediksi nilai RSSI menggunakan model yang disimpan
     y_pred_new = loaded_model.predict(test_generator)
@@ -51,14 +51,27 @@ def predict_anomalies(data):
 
 @app.route('/predict', methods=['POST'])
 def predict():
-    # Terima data dalam format JSON
-    data = request.get_json()
-    df = pd.DataFrame(data)
-    
-    # Panggil fungsi prediksi
-    results = predict_anomalies(df)
-    
-    return jsonify(results)
+    try:
+        # Terima data dalam format JSON
+        data = request.get_json()
+        df = pd.DataFrame(data)
+        
+        # Panggil fungsi prediksi
+        results = predict_anomalies(df)
+        
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    try:
+        # Cek apakah model dan scaler dapat dimuat
+        model_loaded = load_model('model/lstm-over-time_model.h5') is not None
+        scaler_loaded = joblib.load('model/scaler.pkl') is not None
+        return jsonify({'status': 'healthy', 'model_loaded': model_loaded, 'scaler_loaded': scaler_loaded})
+    except Exception as e:
+        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0')
