@@ -4,6 +4,7 @@ import numpy as np
 from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
 import joblib
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 app = Flask(__name__)
 
