@@ -8,6 +8,10 @@ from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 app = Flask(__name__)
 
+MODEL_PATH = 'model/lstm-over-time_model.h5'
+SCALER_PATH = 'model/scaler.pkl'
+PREDICT_PATH = 'data/rssi_predictions_new.csv'
+
 # Fungsi untuk memprediksi dan mendeteksi anomali menggunakan model yang disimpan
 def predict_anomalies(data):
     # Konversi timestamp ke nilai numerik
@@ -55,7 +59,7 @@ def predict():
     try:
         # Terima data dalam format JSON
         data = request.get_json()
-        df = pd.DataFrame(data)
+        df = pd.read_csv(PREDICT_PATH)
         
         # Panggil fungsi prediksi
         results = predict_anomalies(df)
