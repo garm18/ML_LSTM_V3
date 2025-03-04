@@ -5,78 +5,97 @@ from tensorflow.keras.models import load_model
 from tensorflow.keras.preprocessing.sequence import TimeseriesGenerator
 import joblib
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
+import os
 
 app = Flask(__name__)
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False  # Non-aktifkan pretty print untuk response yang lebih ringkas
 
 MODEL_PATH = 'model/lstm-over-time_model.h5'
 SCALER_PATH = 'model/scaler.pkl'
 PREDICT_PATH = 'data/rssi_predictions_new.csv'
 
-# Fungsi untuk memprediksi dan mendeteksi anomali menggunakan model yang disimpan
-def predict_anomalies(data):
-    # Konversi timestamp ke nilai numerik
-    data['timestamp'] = pd.to_datetime(data['timestamp']).astype(np.int64) / 10**9
-    
-    # Muat scaler yang disimpan
-    scaler = joblib.load('model/scaler.pkl')
-    
-    # Normalisasi data menggunakan scaler yang sama
-    data['rssi'] = scaler.transform(data[['rssi']])
-    
-    # Pisahkan fitur dan target
-    X_new = data[['rssi']].values
-    y_new = data['rssi'].values
-    
-    # Gunakan TimeSeriesGenerator
-    seq_length = 10  # Panjang sekuens untuk model LSTM
-    batch_size = 32  # Ukuran batch
-    test_generator = TimeseriesGenerator(X_new, y_new, length=seq_length, batch_size=batch_size)
-    
-    # Muat model yang disimpan
-    loaded_model = load_model('model/lstm-over-time_model.h5')
-    
-    # Prediksi nilai RSSI menggunakan model yang disimpan
-    y_pred_new = loaded_model.predict(test_generator)
-    
-    # Denormalisasi hasil prediksi
-    y_pred_new_denorm = scaler.inverse_transform(y_pred_new)
-    y_new_denorm = scaler.inverse_transform(y_new[seq_length:].reshape(-1, 1))
-    
-    # Konversi timestamp kembali ke format asli
-    timestamps = pd.to_datetime(data['timestamp'][seq_length:], unit='s')
-    
-    # Buat hasil prediksi dalam format JSON
-    results = {
-        'timestamp': timestamps.strftime('%Y-%m-%d %H:%M:%S').tolist(),
-        'actual_rssi': y_new_denorm.flatten().tolist(),
-        'predicted_rssi': y_pred_new_denorm.flatten().tolist()
-    }
-    
-    return results
+# **Muat Model dan Scaler**
+try:
+    model = load_model(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    print("✅ Model dan Scaler berhasil dimuat!")
+except Exception as e:
+    print(f"⚠️ Gagal memuat model atau scaler: {str(e)}")
 
+# **Endpoint: Membaca dan Mengonversi CSV ke JSON**
+@app.route('/load-data', methods=['GET'])
+def load_data():
+    try:
+        if not os.path.exists(PREDICT_PATH):
+            return jsonify({'error': 'CSV file not found'}), 404
+
+        df = pd.read_csv(PREDICT_PATH)
+        required_columns = ['timestamp', 'actual_rssi', 'predicted_rssi']
+        
+        if not all(col in df.columns for col in required_columns):
+            return jsonify({'error': 'Missing required columns'}), 400
+
+        return jsonify({
+            "message": "Data loaded successfully",
+            "data": df.to_dict(orient='records')
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# **Endpoint: Prediksi Data Baru**
 @app.route('/predict', methods=['POST'])
 def predict():
     try:
         # Terima data dalam format JSON
         data = request.get_json()
-        df = pd.read_csv(PREDICT_PATH)
         
-        # Panggil fungsi prediksi
-        results = predict_anomalies(df)
-        
-        return jsonify(results)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        # Pastikan JSON tidak kosong
+        if not data or 'rssi_values' not in data:
+            return jsonify({'error': 'No RSSI values provided'}), 400
 
+        # Ambil nilai RSSI dari JSON
+        rssi_values = data['rssi_values']
+        
+        # Pastikan input berbentuk list
+        if not isinstance(rssi_values, list):
+            return jsonify({'error': 'RSSI values must be a list of numbers'}), 400
+
+        # Konversi ke array numpy
+        rssi_array = np.array(rssi_values).reshape(-1, 1)
+
+        # Normalisasi data
+        scaled_data = scaler.transform(rssi_array)
+
+        # Reshape untuk model LSTM (batch_size, sequence_length, features)
+        sequence_length = 10
+        if len(scaled_data) < sequence_length:
+            return jsonify({'error': 'Not enough data points for LSTM model'}), 400
+
+        X_input = np.array([scaled_data[-sequence_length:]])
+        
+        # Prediksi menggunakan model
+        prediction = model.predict(X_input)
+        
+        # Denormalisasi hasil prediksi
+        prediction_original = scaler.inverse_transform(prediction.reshape(-1, 1))
+
+        return jsonify({
+            'prediction': prediction_original.flatten().tolist(),
+            'scaled_prediction': prediction.flatten().tolist()
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# **Endpoint: Mengecek Status API**
 @app.route('/health', methods=['GET'])
 def health_check():
-    try:
-        # Cek apakah model dan scaler dapat dimuat
-        model_loaded = load_model('model/lstm-over-time_model.h5') is not None
-        scaler_loaded = joblib.load('model/scaler.pkl') is not None
-        return jsonify({'status': 'healthy', 'model_loaded': model_loaded, 'scaler_loaded': scaler_loaded})
-    except Exception as e:
-        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model is not None,
+        'scaler_loaded': scaler is not None
+    })
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0')
